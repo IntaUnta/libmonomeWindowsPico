@@ -3,7 +3,7 @@ This fork makes a few changes to the src/platform/windows.c file to fix detectio
 Serialosc build instructions using this fork
 
 Requirements:
-    [MSYS2](https://www.msys2.org/)
+-[MSYS2](https://www.msys2.org/)
 
 Install required packages in msys2 MinGW terminal
 ```
