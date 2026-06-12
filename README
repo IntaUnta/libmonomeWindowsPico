@@ -1,44 +1,50 @@
-This fork makes a few changes to the src/platform/windows.c file to fix detection of the neotrellis monome using an rp2040 in windows. 
+This fork makes a few changes to `src/platform/windows.c` to fix detection of the neotrellis monome using an RP2040 on Windows.
 
-Serialosc build instructions using this fork
+## Serialosc build instructions using this fork
 
-Requirements:
--[MSYS2](https://www.msys2.org/)
+**Requirements:**
+- [MSYS2](https://www.msys2.org/)
 
-Install required packages in msys2 MinGW terminal
-```
+**Install required packages in msys2 MinGW 64-bit terminal:**
+```bash
 pacman -S mingw-w64-x86_64-cmake mingw-w64-x86_64-gcc mingw-w64-x86_64-ninja git
 ```
-Clone Serialosc
-```
+
+**Clone serialosc:**
+```bash
 git clone https://github.com/monome/serialosc
 cd serialosc
 ```
-Submoddules
-```
+
+**Initialize submodules:**
+```bash
 git submodule update --init --recursive
 ```
-Replace libmonome with this fork
-```
+
+**Replace libmonome with this fork:**
+```bash
 cd third-party/libmonome
 git remote add pico https://github.com/IntaUnta/libmonomeWindowsPico
 git fetch pico
 git checkout pico/main
 cd ../..
 ```
-Build
-```
+
+**Build:**
+```bash
 mkdir build
 cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release -G Ninja
 ninja
 ```
-Test
-```
+
+**Test:**
+```bash
 ./bin/serialoscd.exe
 ```
-You should see
->serialosc [mXXXXXXX]: connected, server running on port XXXXX
+
+You should see:
+> serialosc [mXXXXXXX]: connected, server running on port XXXXX
 
 
 libmonome:
