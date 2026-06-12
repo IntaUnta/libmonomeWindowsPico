@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <malloc.h>
 #include <string.h>
+#include <ctype.h>
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -101,22 +102,30 @@ static char *m_asprintf(const char *fmt, ...) {
 	return buf;
 }
 
+// MODIFIED: removed trailing 'm' from sscanf patterns and added lowercase
+// conversion for compatibility with non-FTDI USB devices (e.g. RP2040)
 static char *m_get_serial_from_instance_id(const char *instance_id) {
 	char serial[MAX_PATH];
+	int i;
 
 	if (strncmp(instance_id, "FTDIBUS\\", 8) == 0) {
-		if (sscanf(instance_id, "FTDIBUS\\VID_%*x+PID_%*x+%[a-zA-Z0-9]m", serial) == 1) {
+		if (sscanf(instance_id, "FTDIBUS\\VID_%*x+PID_%*x+%[a-zA-Z0-9]", serial) == 1) {
 			/* clear the "A" right after the serial number */
 			serial[strlen(serial) - 1] = '\0';
+			/* convert to lowercase */
+			for (i = 0; serial[i]; i++)
+				serial[i] = tolower((unsigned char)serial[i]);
 			return strdup(serial);
 		}
 	} else if (strncmp(instance_id, "USB\\", 4) == 0) {
-		if (sscanf(instance_id,"USB\\VID_%*x&PID_%*x\\%[a-zA-Z0-9]m", serial) == 1) {
+		if (sscanf(instance_id, "USB\\VID_%*x&PID_%*x\\%[a-zA-Z0-9]", serial) == 1) {
+			/* convert to lowercase */
+			for (i = 0; serial[i]; i++)
+				serial[i] = tolower((unsigned char)serial[i]);
 			return strdup(serial);
 		}
 	}
 
-	fprintf(stderr, "libmonome: failed to parse device instance id: %s\n", instance_id);
 	return NULL;
 }
 
@@ -140,6 +149,46 @@ static bool m_get_device_port_name(char *dst, size_t dst_size, HDEVINFO hdevinfo
 
 	RegCloseKey(hkey);
 	return false;
+}
+
+// ADDED: walk up USB device tree to find serial number in parent composite
+// device. RP2040 COM port instance ID has no serial.
+static char *m_get_serial_from_devinst(DEVINST devinst) {
+	DEVINST parent;
+	char instance_id[MAX_DEVICE_ID_LEN];
+	char *serial;
+	CONFIGRET cr;
+
+	/* try the device itself first */
+	if (CM_Get_Device_ID(devinst, instance_id, sizeof(instance_id), 0) == CR_SUCCESS) {
+		serial = m_get_serial_from_instance_id(instance_id);
+		if (serial)
+			return serial;
+	}
+
+	/* walk up to parent */
+	cr = CM_Get_Parent(&parent, devinst, 0);
+	if (cr != CR_SUCCESS)
+		return NULL;
+
+	if (CM_Get_Device_ID(parent, instance_id, sizeof(instance_id), 0) == CR_SUCCESS) {
+		serial = m_get_serial_from_instance_id(instance_id);
+		if (serial)
+			return serial;
+	}
+
+	/* walk up one more level (grandparent) */
+	cr = CM_Get_Parent(&parent, parent, 0);
+	if (cr != CR_SUCCESS)
+		return NULL;
+
+	if (CM_Get_Device_ID(parent, instance_id, sizeof(instance_id), 0) == CR_SUCCESS) {
+		serial = m_get_serial_from_instance_id(instance_id);
+		if (serial)
+			return serial;
+	}
+
+	return NULL;
 }
 
 int monome_platform_open(monome_t *monome, const monome_devmap_t *m,
@@ -191,6 +240,10 @@ int monome_platform_open(monome_t *monome, const monome_devmap_t *m,
 		goto err_commstate;
 
 	PurgeComm(hser, PURGE_RXCLEAR | PURGE_TXCLEAR);
+
+	// ADDED: set DTR to signal ready. Required for RP2040 TinyUSB devices which
+	// will not respond to serial queries until DTR is asserted by the host.
+	EscapeCommFunction(hser, SETDTR);
 
 	monome->fd = _open_osfhandle((intptr_t) hser, _O_RDWR | _O_BINARY);
 	return 0;
@@ -290,7 +343,6 @@ char *monome_platform_get_dev_serial(const char *path) {
 	HDEVINFO hdevinfo;
 	SP_DEVINFO_DATA devinfo;
 	char port_name[MAX_DEVICE_ID_LEN];
-	char instance_id[MAX_DEVICE_ID_LEN];
 	char *serial;
 	int di;
 
@@ -308,16 +360,14 @@ char *monome_platform_get_dev_serial(const char *path) {
 
 	while (SetupDiEnumDeviceInfo(hdevinfo, di, &devinfo)) {
 		if (!m_get_device_port_name(port_name, sizeof(port_name), hdevinfo, &devinfo)) {
+			di++;
 			continue;
 		}
 
 		if (strcmp(port_name, path) == 0) {
-			if (!SetupDiGetDeviceInstanceId(hdevinfo, &devinfo, instance_id, sizeof(instance_id), NULL)) {
-				fprintf(stderr, "libmonome: SetupDiGetDeviceInstanceId() failed.\n");
-				continue;
-			};
-
-			serial = m_get_serial_from_instance_id(instance_id);
+			// MODIFIED: replaced direct instance ID lookup with parent traversal
+			// function to support composite USB devices like RP2040
+			serial = m_get_serial_from_devinst(devinfo.DevInst);
 			break;
 		}
 
